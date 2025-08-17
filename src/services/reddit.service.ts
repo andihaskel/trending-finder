@@ -2,6 +2,10 @@ import axios, { AxiosInstance } from 'axios';
 import { Post, SearchOptions } from '../models/post.model';
 import { PlatformConfig, PlatformService } from './interfaces/platform.service';
 
+const MAX_SUBREDDITS_PER_QUERY = 6;   // cota de subreddits por búsqueda
+const MAX_GLOBAL_ITEMS = 100;         // cota de items procesados antes de cortar
+const MAX_PAGES_PER_SUB = 2;          // páginas por subreddit (si paginás)
+
 export class RedditService implements PlatformService {
   private client: AxiosInstance;
   private accessToken: string | null = null;
@@ -14,6 +18,18 @@ export class RedditService implements PlatformService {
         'User-Agent': config.userAgent || 'TrendingFinder/1.0',
       },
     });
+
+    this.client.interceptors.response.use(
+      r => r,
+      async (err) => {
+        if (err.response?.status === 401) {
+          await this.ensureAccessToken();
+          err.config.headers.Authorization = `Bearer ${this.accessToken}`;
+          return this.client.request(err.config);
+        }
+        return Promise.reject(err);
+      }
+    );
   }
 
   getPlatformName(): string {
@@ -25,25 +41,40 @@ export class RedditService implements PlatformService {
   }
 
   async searchTrends(keyword: string, options: SearchOptions): Promise<Post[]> {
-    if (!this.isAvailable()) {
-      throw new Error('Reddit service is not configured');
-    }
+    if (!this.isAvailable()) throw new Error('Reddit service is not configured');
 
     try {
       await this.ensureAccessToken();
 
-      const subreddits = this.getRelevantSubreddits(keyword);
-      const allPosts: Post[] = [];
+      // 1) Limitar subreddits
+      const subreddits = this.getRelevantSubreddits(keyword)
+        .slice(0, MAX_SUBREDDITS_PER_QUERY);
+
+      const all: Post[] = [];
+      const seen = new Set<string>(); // dedup por id
 
       for (const subreddit of subreddits) {
-        const posts = await this.searchSubreddit(keyword, subreddit, options);
-        allPosts.push(...posts);
+        // 2) Traer con cota por subreddit
+        const chunk = await this.searchSubreddit(keyword, subreddit, options);
+
+        // 3) Dedup y push
+        for (const p of chunk) {
+          if (!seen.has(p.id)) {
+            seen.add(p.id);
+            all.push(p);
+          }
+        }
+
+        // 4) Cota global de items procesados
+        if (all.length >= MAX_GLOBAL_ITEMS) break;
       }
 
-      // Sort by momentum score and limit results
-      return allPosts
+      // 5) Orden final + cota de salida (options.limit)
+      const limitOut = options.limit ?? 10;
+      return all
         .sort((a, b) => b.momentumScore - a.momentumScore)
-        .slice(0, options.limit || 50);
+        .slice(0, limitOut);
+
     } catch (error) {
       console.error('Error searching Reddit trends:', error);
       return [];
@@ -81,45 +112,69 @@ export class RedditService implements PlatformService {
   }
 
   private getRelevantSubreddits(keyword: string): string[] {
-    // Default subreddits for general topics
-    const defaultSubreddits = ['all', 'popular', 'trending'];
-
-    // Keyword-specific subreddits
-    const keywordSubreddits: Record<string, string[]> = {
-      'ai': ['artificial', 'MachineLearning', 'OpenAI', 'ChatGPT'],
-      'coffee': ['Coffee', 'barista', 'espresso'],
-      'tech': ['technology', 'programming', 'gadgets', 'Futurology'],
-      'gaming': ['gaming', 'PCGaming', 'PS5', 'XboxSeriesX'],
-      'crypto': ['CryptoCurrency', 'Bitcoin', 'ethereum'],
+    const defaults = ['all', 'popular'];
+    const map: Record<string, string[]> = {
+      ai: ['artificial', 'MachineLearning', 'OpenAI', 'ChatGPT'],
+      coffee: ['Coffee', 'barista', 'espresso'],
+      tech: ['technology', 'programming', 'gadgets', 'Futurology'],
+      gaming: ['gaming', 'PCGaming', 'PS5', 'XboxSeriesX'],
+      crypto: ['CryptoCurrency', 'Bitcoin', 'ethereum'],
     };
 
-    // Find matching subreddits
-    const matchingSubreddits: string[] = [];
-    for (const [key, subreddits] of Object.entries(keywordSubreddits)) {
-      if (keyword.toLowerCase().includes(key)) {
-        matchingSubreddits.push(...subreddits);
-      }
-    }
+    const k = keyword.toLowerCase();
+    const hits = Object.entries(map)
+      .filter(([key]) => k.includes(key))
+      .flatMap(([, subs]) => subs);
 
-    return [...new Set([...matchingSubreddits, ...defaultSubreddits])];
+    return Array.from(new Set([...hits, ...defaults]));
   }
 
-  private async searchSubreddit(keyword: string, subreddit: string, options: SearchOptions): Promise<Post[]> {
+  private async searchSubreddit(
+    keyword: string,
+    subreddit: string,
+    options: SearchOptions
+  ): Promise<Post[]> {
     try {
       const timeFilter = this.mapTimeframeToReddit(options.timeframe);
 
-      const response = await this.client.get(`/r/${subreddit}/search`, {
-        params: {
-          q: keyword,
-          t: timeFilter,
-          sort: 'hot',
-          limit: 25,
-        },
-      });
+      // per-page no mayor a 50 y no mayor al limit pedido
+      const perPage = Math.min(options.limit ?? 25, 50);
 
-      return response.data.data.children
-        .map((child: any) => this.normalizeRedditPost(child.data))
-        .filter((post: Post) => post !== null);
+      const out: Post[] = [];
+      let after: string | undefined;
+
+      for (let page = 0; page < MAX_PAGES_PER_SUB; page++) {
+        const params: Record<string, any> = {
+          q: keyword,
+          sort: timeFilter === 'all' ? 'new' : 'top', // top respeta t, new para all
+          limit: perPage,
+          restrict_sr: 'on',
+          t: timeFilter === 'all' ? undefined : timeFilter, // t solo si no es 'all'
+          after,
+          include_over_18: false,
+        };
+
+        const url = `/r/${subreddit}/search`;
+
+        const response = await this.client.get(url, { params });
+        const children = response.data?.data?.children ?? [];
+
+        for (const child of children) {
+          const post = this.normalizeRedditPost(child.data);
+          if (post) out.push(post);
+        }
+
+        after = response.data?.data?.after || undefined;
+
+        // corta si alcanzaste lo pedido
+        if (out.length >= (options.limit ?? 25)) break;
+
+        // si no hay más páginas, corta
+        if (!after) break;
+      }
+
+      return out;
+
     } catch (error) {
       console.error(`Error searching subreddit ${subreddit}:`, error);
       return [];
@@ -128,30 +183,40 @@ export class RedditService implements PlatformService {
 
   private normalizeRedditPost(data: any): Post | null {
     try {
-      const createdAt = new Date(data.created_utc * 1000);
-      const hoursSinceCreation = (Date.now() - createdAt.getTime()) / (1000 * 60 * 60);
+      if (data.stickied || data.is_meta || data.over_18 || data.is_ad) return null;
 
-      // Calculate momentum score (upvotes + comments) / hours
-      const engagement = (data.ups || 0) + (data.num_comments || 0);
-      const momentumScore = hoursSinceCreation > 0 ? engagement / hoursSinceCreation : engagement;
+      const createdAt = new Date((data.created_utc ?? data.created) * 1000);
+      const hours = Math.max(0.25, (Date.now() - createdAt.getTime()) / 36e5);
+
+      const upvotes = data.ups ?? 0;
+      const comments = data.num_comments ?? 0;
+      const engagement = upvotes + comments * 2; // pondera comments
+      const momentumScore = Math.round((engagement / hours) * 100) / 100;
+
+      const title = data.title ?? '';
+      const selftext = (data.selftext ?? '').trim();
+      const content = selftext || title;
+      if (!content) return null;
+
+      const thumbnail =
+        typeof data.thumbnail === 'string' && data.thumbnail.startsWith('http')
+          ? data.thumbnail
+          : data.preview?.images?.[0]?.source?.url?.replaceAll('&amp;', '&');
 
       return {
         id: `reddit_${data.id}`,
         platform: 'reddit',
         author: data.author || 'Unknown',
-        content: data.title || data.selftext || 'No content',
-        title: data.title,
-        metrics: {
-          upvotes: data.ups || 0,
-          comments: data.num_comments || 0,
-        },
+        content,
+        title: title || undefined,
+        metrics: { upvotes, comments },
         link: `https://reddit.com${data.permalink}`,
+        thumbnail,
         publishedAt: createdAt,
         createdAt,
-        momentumScore: Math.round(momentumScore * 100) / 100,
+        momentumScore,
       };
-    } catch (error) {
-      console.error('Error normalizing Reddit post:', error);
+    } catch {
       return null;
     }
   }
