@@ -1,5 +1,5 @@
 import { relations } from 'drizzle-orm';
-import { jsonb, pgTable, real, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import { jsonb, pgTable, real, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 
 // Users table
 export const users = pgTable('users', {
@@ -29,8 +29,8 @@ export const trends = pgTable('trends', {
 export const posts = pgTable('posts', {
   id: uuid('id').primaryKey().defaultRandom(),
 
-  // opcional pero útil para upsert/único (tweet id, reddit id, video id)
-  platformId: text('platform_id'), // .notNull() si siempre lo tenés
+  // ID único de la plataforma (tweet id, reddit id, video id)
+  platformId: text('platform_id').notNull(), // ✅ Ahora es NOT NULL
   platform: text('platform').notNull(), // 'reddit' | 'youtube' | 'twitter'
 
   author: text('author').notNull(),
@@ -49,7 +49,10 @@ export const posts = pgTable('posts', {
   momentumScore: real('momentum_score').notNull(), // double/real para decimales
   // pgvector; usar custom type para vector
   embedding: text('embedding'), // <-- cambiar a vector(1536) cuando tengas pgvector
-});
+}, (table) => ({
+  // Unique constraint: no puede haber dos posts con el mismo platform_id en la misma plataforma
+  uniquePlatformPost: uniqueIndex('unique_platform_post').on(table.platformId, table.platform),
+}));
 // Relations
 export const usersRelations = relations(users, ({ many }) => ({
   trends: many(trends),

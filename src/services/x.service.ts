@@ -108,6 +108,7 @@ export class XService implements PlatformService {
 
       return {
         id: `twitter_${tweet.id}`,
+        platformId: tweet.id, // ID único de Twitter
         platform: 'twitter',
         author,
         content: tweet.text,
@@ -131,6 +132,7 @@ export class XService implements PlatformService {
     const mockTweets = [
       {
         id: `mock_1_${Date.now()}`,
+        platformId: '123456789',
         platform: 'twitter' as const,
         author: 'tech_enthusiast',
         content: `Just discovered amazing ${keyword} trends! The momentum is incredible right now. #${keyword.replace(/\s+/g, '')} #trending`,
@@ -142,6 +144,7 @@ export class XService implements PlatformService {
       },
       {
         id: `mock_2_${Date.now()}`,
+        platformId: '123456790',
         platform: 'twitter' as const,
         author: 'innovation_hub',
         content: `${keyword} is revolutionizing the industry. Here's why you should pay attention to this trend.`,
@@ -153,6 +156,7 @@ export class XService implements PlatformService {
       },
       {
         id: `mock_3_${Date.now()}`,
+        platformId: '123456791',
         platform: 'twitter' as const,
         author: 'future_insights',
         content: `Breaking: ${keyword} has reached critical mass. This is the perfect time to get involved!`,
@@ -164,6 +168,7 @@ export class XService implements PlatformService {
       },
       {
         id: `mock_4_${Date.now()}`,
+        platformId: '123456792',
         platform: 'twitter' as const,
         author: 'trend_analyst',
         content: `Analysis: ${keyword} shows 300% growth in the last 24 hours. The data doesn't lie! 📊`,
@@ -175,6 +180,7 @@ export class XService implements PlatformService {
       },
       {
         id: `mock_5_${Date.now()}`,
+        platformId: '123456793',
         platform: 'twitter' as const,
         author: 'digital_nomad',
         content: `Just tried the new ${keyword} approach and WOW! Game changer for content creators.`,

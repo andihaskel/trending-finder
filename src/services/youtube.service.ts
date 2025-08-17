@@ -110,6 +110,7 @@ export class YouTubeService implements PlatformService {
 
       return {
         id: `youtube_${video.id}`,
+        platformId: video.id, // ID único de YouTube
         platform: 'youtube',
         author: video.snippet.channelTitle,
         content: video.snippet.description || 'No description',

@@ -19,6 +19,7 @@ export interface PostMetrics {
  */
 export interface Post {
   id: string;                  // UUID interno (PK)
+  platformId: string;          // ID único de la plataforma (tweet id, reddit id, video id)
   platform: Platform;
   author: string;
   content: string;
@@ -40,6 +41,7 @@ export interface Post {
  * - No se acepta `embedding`; lo genera el backend.
  */
 export interface PostCreate {
+  platformId: string;          // ID único de la plataforma (requerido)
   platform: Platform;
   author: string;
   content: string;
