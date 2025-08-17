@@ -1,0 +1,37 @@
+version: '3.8'
+
+services:
+  app:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=development
+      - PORT=3000
+      - DATABASE_URL=postgresql://postgres:password@postgres:5432/trending_finder
+    depends_on:
+      - postgres
+    volumes:
+      - ./logs:/app/logs
+    networks:
+      - trending-finder-network
+
+  postgres:
+    image: pgvector/pgvector:pg15  # Postgres 15 con pgvector instalado
+    environment:
+      - POSTGRES_DB=trending_finder
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - trending-finder-network
+
+volumes:
+  postgres_data:
+
+networks:
+  trending-finder-network:
+    driver: bridge
