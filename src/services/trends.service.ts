@@ -57,13 +57,8 @@ export class TrendsService {
       const filtered = this.applyFiltersAndSort(enriched, { ...options, platforms });
       console.log(`✅ [TrendsService] Posts después de filtros: ${filtered.length}`);
 
-      const result: SearchResult = {
-        keyword: options.keyword,
-        platforms,
-        results: filtered,
-        totalResults: filtered.length,
-        searchTime: new Date(),
-      };
+      // Usar toSearchResult para normalizar y truncar posts de APIs externas también
+      const result = this.toSearchResult(options, filtered);
 
       // guardar en background (no bloquear respuesta)
       console.log(`💾 [TrendsService] Guardando resultados en DB...`);
@@ -78,6 +73,12 @@ export class TrendsService {
       throw new Error(`Failed to search trends: ${e?.message ?? e}`);
     }
   }
+
+  private toVectorLiteral(vec: number[]) {
+    // Construye '[v1,v2,...]'::vector(1536)
+    return sql.raw(`'[${vec.join(',')}]'::vector(1536)`);
+  }
+
 
   /**
    * DB vector search (pgvector) + filtros (timeframe/plataformas) + orden por momentum
@@ -96,6 +97,7 @@ export class TrendsService {
         return this.toSearchResult(options, filtered);
       }
 
+      const vecLiteral = this.toVectorLiteral(queryEmbedding);
       console.log(`  ✅ [TrendsService] Embedding generado, buscando en DB...`);
       // Traemos N candidatos por vector, luego filtramos por timeframe y plataformas
       const raw = await db.execute(sql`
@@ -104,7 +106,7 @@ export class TrendsService {
           published_at, created_at, momentum_score
         FROM ${posts}
         WHERE embedding IS NOT NULL
-        ORDER BY embedding <-> ${queryEmbedding}
+        ORDER BY embedding <-> ${vecLiteral}
         LIMIT ${options.limit ?? 100}
       `);
 
@@ -186,7 +188,7 @@ export class TrendsService {
         platformId: r.platform_id || `temp_${r.id}`,
         platform: r.platform as Platform,
         author: r.author,
-        content: this.truncateText(r.content, 1000) || '',
+        content: this.truncateText(r.content, 600) || '',
         title: this.truncateText(r.title, 200) || undefined,
         metrics: (r.metrics ?? {}) as PostMetrics,
         link: r.link,
@@ -252,7 +254,7 @@ export class TrendsService {
         platformId: r.platform_id || `temp_${r.id}`,
         platform: r.platform as Platform,
         author: r.author,
-        content: this.truncateText(r.content, 1000) || '',
+        content: this.truncateText(r.content, 600) || '',
         title: this.truncateText(r.title, 200) || undefined,
         metrics: (r.metrics ?? {}) as PostMetrics,
         link: r.link,
